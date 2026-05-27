@@ -6,46 +6,55 @@ from app.services.audio import transcribe_audio
 
 router = APIRouter()
 
-# --- Our original text-only endpoint ---
 @router.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
-    ai_reply = await generate_tutor_response(request.messages)
-    return ChatResponse(reply=ai_reply)
+    lesson_data = await generate_tutor_response(request.messages, "English", "C1 (Advanced)")
+    return ChatResponse(
+        user_text="[Text Input]",
+        english_audio=lesson_data.get("english_audio", ""),
+        target_audio=lesson_data.get("target_audio", ""),
+        feedback=lesson_data.get("feedback", ""),
+        score=lesson_data.get("score", 0),
+        next_exercise=lesson_data.get("next_exercise", "")
+    )
 
-# --- Our NEW voice-enabled endpoint ---
 @router.post("/chat-audio", response_model=ChatResponse)
 async def chat_audio_endpoint(
     file: UploadFile = File(...),
-    messages_json: str = Form("[]") # We accept history as a stringified JSON form field
+    messages_json: str = Form("[]"), 
+    target_language: str = Form(...),  
+    proficiency_level: str = Form(...)
 ):
-    """
-    Receives an audio file and optional chat history.
-    1. Transcribes audio to text.
-    2. Appends user text to history.
-    3. Gets AI response.
-    """
-    # 1. Read the audio into memory and transcribe it
     file_bytes = await file.read()
-    print(f"🚨 DEBUG: Received file name: {file.filename}")
-    print(f"🚨 DEBUG: Received file size: {len(file_bytes)} bytes")
+    
+    # REVERTED: We are no longer passing target_language here
     user_text = await transcribe_audio(file_bytes, file.filename)
     
-    # Fail gracefully if audio was empty or corrupted
     if not user_text:
-        return ChatResponse(reply="I couldn't hear that clearly. Could you try speaking a bit louder?")
+        return ChatResponse(
+            user_text="", 
+            english_audio="I couldn't hear that clearly. Could you try speaking a bit louder?",
+            target_audio="",
+            feedback="Microphone error. No audio detected.",
+            score=0,
+            next_exercise="Please try again."
+        )
 
-    # 2. Reconstruct the chat history from the frontend
     try:
         history_dicts = json.loads(messages_json)
         messages = [Message(**msg) for msg in history_dicts]
     except Exception:
-        # If frontend sends bad JSON, we just start a new conversation
         messages = []
         
-    # 3. Add the newly transcribed message to the end of the history
     messages.append(Message(role="user", content=user_text))
     
-    # 4. Pass the full context to Llama 3.1
-    ai_reply = await generate_tutor_response(messages)
+    lesson_data = await generate_tutor_response(messages, target_language, proficiency_level)
     
-    return ChatResponse(user_text=user_text,reply=ai_reply)
+    return ChatResponse(
+        user_text=user_text,
+        english_audio=lesson_data.get("english_audio", ""),
+        target_audio=lesson_data.get("target_audio", ""),
+        feedback=lesson_data.get("feedback", ""),
+        score=lesson_data.get("score", 0),
+        next_exercise=lesson_data.get("next_exercise", "")
+    )
